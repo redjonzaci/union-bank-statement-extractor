@@ -33,7 +33,7 @@ HEADERS_TO_REMOVE = [
     "-llogar",
 ]
 
-SEPARATOR_PATTERN = re.compile(r"^-{20,}$")
+SEPARATOR_PATTERN = re.compile(r"^-[-\s]{19,}$")
 DATE_PATTERN = re.compile(r"^(\d{2}-[A-Z]{3}-\d{4})\s*$")
 AMOUNT_PATTERN = re.compile(r"[\d,]+\.\d{2}")
 FIELDNAMES = [
@@ -108,28 +108,41 @@ def process_pdf(pdf_file) -> tuple:
     # Parse transactions
     rows = []
     i = 0
-    while i < len(lines) - 3:
+    while i < len(lines) - 2:
         if not DATE_PATTERN.match(lines[i].strip()):
             i += 1
             continue
 
-        detajet = extract_field("Detajet", lines[i + 2])
-        if not detajet:
+        amounts = parse_amounts(lines[i + 1])
+        if not amounts["balanca"]:
             i += 1
             continue
 
-        amounts = parse_amounts(lines[i + 1])
+        # Check for Detajet on line i+2 (single-line) or i+3 (multi-line description)
+        # Also handle OCR typo "Detaj et:"
+        detajet_offset = None
+        detajet = ""
+        for offset in [2, 3]:
+            if i + offset < len(lines):
+                line = lines[i + offset]
+                if "Detajet:" in line or "Detaj et:" in line:
+                    detajet = extract_field("Detajet", line) or extract_field(
+                        "Detaj et", line
+                    )
+                    detajet_offset = offset
+                    break
 
-        # Check if Perfituesi is present on the next line after Detajet
-        # If Perfituesi exists, there are no other fields (Referenca, Nr i Kartes, etc.)
-        perfituesi = ""
-        if i + 3 < len(lines) and "Perfituesi:" in lines[i + 3]:
-            perfituesi = extract_field("Perfituesi", lines[i + 3])
+        # Handle transactions without Detajet (e.g., "Komisione te tjera ne llogari")
+        if not detajet:
+            # Skip to next date
+            j = i + 2
+            while j < len(lines) and not DATE_PATTERN.match(lines[j].strip()):
+                j += 1
             rows.append(
                 {
                     "": amounts["prefix"],
-                    "Detajet": detajet,
-                    "Perfituesi": perfituesi,
+                    "Detajet": "",
+                    "Perfituesi": "",
                     "Referenca": "",
                     "Nr i Kartes": "",
                     "Data/Ora": "",
@@ -139,41 +152,100 @@ def process_pdf(pdf_file) -> tuple:
                     "Balanca": amounts["balanca"],
                 }
             )
-            i += 4
+            i = j
             continue
 
-        # No Perfituesi - extract other fields
+        # Check the line after Detajet
+        next_line_idx = i + detajet_offset + 1
+        perfituesi = ""
+
+        if next_line_idx < len(lines):
+            next_line = lines[next_line_idx]
+
+            # Case 1: Perfituesi or "Me Urdher Te" present
+            if "Perfituesi:" in next_line or "Me Urdher Te:" in next_line:
+                perfituesi_parts = [
+                    extract_field("Perfituesi", next_line)
+                    or extract_field("Me Urdher Te", next_line)
+                ]
+                # Collect continuation lines until we hit a date
+                j = next_line_idx + 1
+                while j < len(lines) and not DATE_PATTERN.match(lines[j].strip()):
+                    perfituesi_parts.append(lines[j].strip())
+                    j += 1
+                perfituesi = " ".join(perfituesi_parts)
+                rows.append(
+                    {
+                        "": amounts["prefix"],
+                        "Detajet": detajet,
+                        "Perfituesi": perfituesi,
+                        "Referenca": "",
+                        "Nr i Kartes": "",
+                        "Data/Ora": "",
+                        "Terminali": "",
+                        "Debi": amounts["debi"],
+                        "Kredi": amounts["kredi"],
+                        "Balanca": amounts["balanca"],
+                    }
+                )
+                i = j
+                continue
+
+            # Case 2: Next line is already a new date (transaction only had Detajet)
+            if DATE_PATTERN.match(next_line.strip()):
+                rows.append(
+                    {
+                        "": amounts["prefix"],
+                        "Detajet": detajet,
+                        "Perfituesi": "",
+                        "Referenca": "",
+                        "Nr i Kartes": "",
+                        "Data/Ora": "",
+                        "Terminali": "",
+                        "Debi": amounts["debi"],
+                        "Kredi": amounts["kredi"],
+                        "Balanca": amounts["balanca"],
+                    }
+                )
+                i = next_line_idx
+                continue
+
+        # Case 3: Standard POS transaction with Referenca, Nr i Kartes, etc.
+        ref_line = i + detajet_offset + 1
+        terminali = ""
+        if ref_line + 3 < len(lines):
+            term_line = lines[ref_line + 3]
+            terminali = extract_field("Terminali", term_line) or extract_field(
+                "Termi nali", term_line
+            )
+
         rows.append(
             {
                 "": amounts["prefix"],
                 "Detajet": detajet,
                 "Perfituesi": "",
                 "Referenca": (
-                    extract_field("Referenca", lines[i + 3])
-                    if i + 3 < len(lines)
+                    extract_field("Referenca", lines[ref_line])
+                    if ref_line < len(lines)
                     else ""
                 ),
                 "Nr i Kartes": (
-                    extract_field("Nr i Kartes", lines[i + 4])
-                    if i + 4 < len(lines)
+                    extract_field("Nr i Kartes", lines[ref_line + 1])
+                    if ref_line + 1 < len(lines)
                     else ""
                 ),
                 "Data/Ora": (
-                    extract_field("Data/Ora", lines[i + 5])
-                    if i + 5 < len(lines)
+                    extract_field("Data/Ora", lines[ref_line + 2])
+                    if ref_line + 2 < len(lines)
                     else ""
                 ),
-                "Terminali": (
-                    extract_field("Terminali", lines[i + 6])
-                    if i + 6 < len(lines)
-                    else ""
-                ),
+                "Terminali": terminali,
                 "Debi": amounts["debi"],
                 "Kredi": amounts["kredi"],
                 "Balanca": amounts["balanca"],
             }
         )
-        i += 7
+        i += detajet_offset + 5
 
     return rows, combined
 
