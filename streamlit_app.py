@@ -139,11 +139,25 @@ st.set_page_config(page_title="Union Bank Statement Extractor", page_icon="🏦"
 st.title("🏦 Union Bank Statement Extractor")
 st.write("Upload a Union Bank PDF statement to extract transactions to CSV.")
 
+# Initialize session state
+if "processed_file" not in st.session_state:
+    st.session_state.processed_file = None
+    st.session_state.rows = None
+    st.session_state.text = None
+
 uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
 
 if uploaded_file:
-    with st.spinner("Processing PDF..."):
-        rows, text = process_pdf(uploaded_file)
+    # Only process if it's a new file
+    if st.session_state.processed_file != uploaded_file.name:
+        with st.spinner("Processing PDF..."):
+            rows, text = process_pdf(uploaded_file)
+            st.session_state.processed_file = uploaded_file.name
+            st.session_state.rows = rows
+            st.session_state.text = text
+    else:
+        rows = st.session_state.rows
+        text = st.session_state.text
 
     st.success(f"✅ Found {len(rows)} transactions!")
 
