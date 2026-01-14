@@ -37,6 +37,7 @@ SEPARATOR_PATTERN = re.compile(r"^-{20,}$")
 DATE_PATTERN = re.compile(r"^(\d{2}-[A-Z]{3}-\d{4})\s*$")
 AMOUNT_PATTERN = re.compile(r"[\d,]+\.\d{2}")
 FIELDNAMES = [
+    "",
     "Detajet",
     "Referenca",
     "Nr i Kartes",
@@ -67,16 +68,24 @@ def extract_field(label: str, line: str) -> str:
 
 
 def parse_amounts(line: str) -> dict:
-    result = {"debi": "", "kredi": "", "balanca": ""}
+    result = {"prefix": "", "debi": "", "kredi": "", "balanca": ""}
+    first_amount_pos = None
     for match in AMOUNT_PATTERN.finditer(line):
         amt = match.group().replace(",", "")
         pos = match.start()
+        if first_amount_pos is None or pos < first_amount_pos:
+            first_amount_pos = pos
         if pos >= 100:
             result["balanca"] = amt
         elif pos >= 80:
             result["kredi"] = amt
         elif pos >= 60:
             result["debi"] = amt
+    # Extract text before the first amount
+    if first_amount_pos is not None:
+        result["prefix"] = line[:first_amount_pos].strip()
+    else:
+        result["prefix"] = line.strip()
     return result
 
 
@@ -111,6 +120,7 @@ def process_pdf(pdf_file) -> tuple:
         amounts = parse_amounts(lines[i + 1])
         rows.append(
             {
+                "": amounts["prefix"],
                 "Detajet": detajet,
                 "Referenca": extract_field("Referenca", lines[i + 3]),
                 "Nr i Kartes": extract_field("Nr i Kartes", lines[i + 4]),
