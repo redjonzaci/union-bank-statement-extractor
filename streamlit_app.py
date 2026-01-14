@@ -121,35 +121,51 @@ def process_pdf(pdf_file) -> tuple:
         amounts = parse_amounts(lines[i + 1])
 
         # Check if Perfituesi is present on the next line after Detajet
-        offset = 3
+        # If Perfituesi exists, there are no other fields (Referenca, Nr i Kartes, etc.)
         perfituesi = ""
-        if i + offset < len(lines) and "Perfituesi:" in lines[i + offset]:
-            perfituesi = extract_field("Perfituesi", lines[i + offset])
-            offset += 1
+        if i + 3 < len(lines) and "Perfituesi:" in lines[i + 3]:
+            perfituesi = extract_field("Perfituesi", lines[i + 3])
+            rows.append(
+                {
+                    "": amounts["prefix"],
+                    "Detajet": detajet,
+                    "Perfituesi": perfituesi,
+                    "Referenca": "",
+                    "Nr i Kartes": "",
+                    "Data/Ora": "",
+                    "Terminali": "",
+                    "Debi": amounts["debi"],
+                    "Kredi": amounts["kredi"],
+                    "Balanca": amounts["balanca"],
+                }
+            )
+            i += 4
+            continue
 
+        # No Perfituesi - extract other fields
         rows.append(
             {
                 "": amounts["prefix"],
                 "Detajet": detajet,
-                "Perfituesi": perfituesi,
+                "Perfituesi": "",
                 "Referenca": (
-                    extract_field("Referenca", lines[i + offset])
-                    if i + offset < len(lines)
+                    extract_field("Referenca", lines[i + 3])
+                    if i + 3 < len(lines)
                     else ""
                 ),
                 "Nr i Kartes": (
-                    extract_field("Nr i Kartes", lines[i + offset + 1])
-                    if i + offset + 1 < len(lines)
+                    extract_field("Nr i Kartes", lines[i + 4])
+                    if i + 4 < len(lines)
                     else ""
                 ),
                 "Data/Ora": (
-                    extract_field("Data/Ora", lines[i + offset + 2])
-                    if i + offset + 2 < len(lines)
+                    extract_field("Data/Ora", lines[i + 5])
+                    if i + 5 < len(lines)
                     else ""
                 ),
                 "Terminali": (
-                    extract_field("Terminali", lines[i + offset + 3])
-                    if i + offset + 3 < len(lines)
+                    extract_field("Terminali", lines[i + 6])
+                    if i + 6 < len(lines)
                     else ""
                 ),
                 "Debi": amounts["debi"],
@@ -157,7 +173,7 @@ def process_pdf(pdf_file) -> tuple:
                 "Balanca": amounts["balanca"],
             }
         )
-        i += offset + 4
+        i += 7
 
     return rows, combined
 
