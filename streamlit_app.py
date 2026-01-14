@@ -206,18 +206,6 @@ if uploaded_file:
         mime="text/csv",
     )
 
-    # Filtered CSV (no POS)
-    filtered = [
-        r for r in rows if "Veprim ne" not in r["Detajet"] or "POS" not in r["Detajet"]
-    ]
-    csv_filtered = rows_to_csv(filtered)
-    st.download_button(
-        label=f"📥 Download transactions_jo_veprim_ne_pos.csv ({len(filtered)} rows)",
-        data=csv_filtered,
-        file_name="transactions_jo_veprim_ne_pos.csv",
-        mime="text/csv",
-    )
-
     # Raw text
     st.download_button(
         label="📥 Download transactions.txt",
