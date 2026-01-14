@@ -39,6 +39,7 @@ AMOUNT_PATTERN = re.compile(r"[\d,]+\.\d{2}")
 FIELDNAMES = [
     "",
     "Detajet",
+    "Perfituesi",
     "Referenca",
     "Nr i Kartes",
     "Data/Ora",
@@ -107,7 +108,7 @@ def process_pdf(pdf_file) -> tuple:
     # Parse transactions
     rows = []
     i = 0
-    while i < len(lines) - 6:
+    while i < len(lines) - 3:
         if not DATE_PATTERN.match(lines[i].strip()):
             i += 1
             continue
@@ -118,20 +119,45 @@ def process_pdf(pdf_file) -> tuple:
             continue
 
         amounts = parse_amounts(lines[i + 1])
+
+        # Check if Perfituesi is present on the next line after Detajet
+        offset = 3
+        perfituesi = ""
+        if i + offset < len(lines) and "Perfituesi:" in lines[i + offset]:
+            perfituesi = extract_field("Perfituesi", lines[i + offset])
+            offset += 1
+
         rows.append(
             {
                 "": amounts["prefix"],
                 "Detajet": detajet,
-                "Referenca": extract_field("Referenca", lines[i + 3]),
-                "Nr i Kartes": extract_field("Nr i Kartes", lines[i + 4]),
-                "Data/Ora": extract_field("Data/Ora", lines[i + 5]),
-                "Terminali": extract_field("Terminali", lines[i + 6]),
+                "Perfituesi": perfituesi,
+                "Referenca": (
+                    extract_field("Referenca", lines[i + offset])
+                    if i + offset < len(lines)
+                    else ""
+                ),
+                "Nr i Kartes": (
+                    extract_field("Nr i Kartes", lines[i + offset + 1])
+                    if i + offset + 1 < len(lines)
+                    else ""
+                ),
+                "Data/Ora": (
+                    extract_field("Data/Ora", lines[i + offset + 2])
+                    if i + offset + 2 < len(lines)
+                    else ""
+                ),
+                "Terminali": (
+                    extract_field("Terminali", lines[i + offset + 3])
+                    if i + offset + 3 < len(lines)
+                    else ""
+                ),
                 "Debi": amounts["debi"],
                 "Kredi": amounts["kredi"],
                 "Balanca": amounts["balanca"],
             }
         )
-        i += 7
+        i += offset + 4
 
     return rows, combined
 
