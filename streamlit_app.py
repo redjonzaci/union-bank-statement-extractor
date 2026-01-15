@@ -7,6 +7,7 @@ Upload a PDF and get CSV files back.
 import re
 import csv
 import io
+import hashlib
 import streamlit as st
 from PyPDF2 import PdfReader
 
@@ -49,6 +50,35 @@ FIELDNAMES = [
     "Balanca",
 ]
 
+# Characters that can trigger formula injection in spreadsheet applications
+CSV_INJECTION_CHARS = ("=", "+", "-", "@", "\t", "\r", "\n")
+
+
+def sanitize_csv_field(value: str) -> str:
+    """
+    Sanitize a CSV field to prevent formula injection attacks.
+    
+    Spreadsheet applications like Excel can execute formulas if a cell
+    starts with =, +, -, @, or tab characters. This function prefixes
+    such values with a single quote to prevent execution.
+    """
+    if isinstance(value, str) and value and value[0] in CSV_INJECTION_CHARS:
+        return "'" + value
+    return value
+
+
+def get_file_hash(file_obj) -> str:
+    """
+    Generate a hash of the file content to uniquely identify files.
+    
+    This ensures that different files with the same name are processed
+    separately, fixing the cache invalidation bug.
+    """
+    file_obj.seek(0)
+    content = file_obj.read()
+    file_obj.seek(0)  # Reset file pointer for later use
+    return hashlib.sha256(content).hexdigest()[:16]
+
 
 def remove_headers(text: str) -> str:
     cleaned = []
@@ -90,17 +120,47 @@ def parse_amounts(line: str) -> dict:
     return result
 
 
+class PDFProcessingError(Exception):
+    """Custom exception for PDF processing errors."""
+    pass
+
+
 def process_pdf(pdf_file) -> tuple:
-    reader = PdfReader(pdf_file)
+    """
+    Process a PDF file and extract transactions.
+    
+    Args:
+        pdf_file: File-like object containing the PDF
+        
+    Returns:
+        tuple: (rows, combined_text) where rows is a list of transaction dicts
+        
+    Raises:
+        PDFProcessingError: If the PDF cannot be read or processed
+    """
+    try:
+        reader = PdfReader(pdf_file)
+    except Exception as e:
+        raise PDFProcessingError(f"Failed to read PDF file: {str(e)}") from e
+
+    if not reader.pages:
+        raise PDFProcessingError("PDF file appears to be empty or has no readable pages")
 
     # Extract text
     all_text = []
-    for page in reader.pages:
-        text = page.extract_text()
-        if text:
-            cleaned = remove_headers(text)
-            if cleaned.strip():
-                all_text.append(cleaned)
+    try:
+        for page_num, page in enumerate(reader.pages, 1):
+            try:
+                text = page.extract_text()
+                if text:
+                    cleaned = remove_headers(text)
+                    if cleaned.strip():
+                        all_text.append(cleaned)
+            except Exception as e:
+                # Log warning but continue processing other pages
+                st.warning(f"Warning: Could not extract text from page {page_num}: {str(e)}")
+    except Exception as e:
+        raise PDFProcessingError(f"Error while extracting text from PDF: {str(e)}") from e
 
     combined = "\n".join(all_text)
     lines = combined.split("\n")
@@ -251,10 +311,20 @@ def process_pdf(pdf_file) -> tuple:
 
 
 def rows_to_csv(rows: list) -> str:
+    """
+    Convert rows to CSV format with sanitization to prevent CSV injection.
+    """
     output = io.StringIO()
     writer = csv.DictWriter(output, fieldnames=FIELDNAMES)
     writer.writeheader()
-    writer.writerows(rows)
+    
+    # Sanitize each field before writing to prevent CSV injection attacks
+    sanitized_rows = []
+    for row in rows:
+        sanitized_row = {key: sanitize_csv_field(str(value)) for key, value in row.items()}
+        sanitized_rows.append(sanitized_row)
+    
+    writer.writerows(sanitized_rows)
     return output.getvalue()
 
 
@@ -264,44 +334,62 @@ st.title("🏦 Union Bank Statement Extractor")
 st.write("Upload a Union Bank PDF statement to extract transactions to CSV.")
 
 # Initialize session state
-if "processed_file" not in st.session_state:
-    st.session_state.processed_file = None
+if "processed_file_hash" not in st.session_state:
+    st.session_state.processed_file_hash = None
     st.session_state.rows = None
     st.session_state.text = None
+    st.session_state.error = None
 
 uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
 
 if uploaded_file:
-    # Only process if it's a new file
-    if st.session_state.processed_file != uploaded_file.name:
+    # Generate a hash of the file content to uniquely identify it
+    # This fixes the bug where different files with the same name would use cached data
+    file_hash = get_file_hash(uploaded_file)
+    
+    # Only process if it's a new file (based on content hash, not just filename)
+    if st.session_state.processed_file_hash != file_hash:
         with st.spinner("Processing PDF..."):
-            rows, text = process_pdf(uploaded_file)
-            st.session_state.processed_file = uploaded_file.name
-            st.session_state.rows = rows
-            st.session_state.text = text
-    else:
+            try:
+                rows, text = process_pdf(uploaded_file)
+                st.session_state.processed_file_hash = file_hash
+                st.session_state.rows = rows
+                st.session_state.text = text
+                st.session_state.error = None
+            except PDFProcessingError as e:
+                st.session_state.error = str(e)
+                st.session_state.rows = None
+                st.session_state.text = None
+            except Exception as e:
+                st.session_state.error = f"Unexpected error processing PDF: {str(e)}"
+                st.session_state.rows = None
+                st.session_state.text = None
+    
+    # Check for errors
+    if st.session_state.error:
+        st.error(f"❌ Error: {st.session_state.error}")
+    elif st.session_state.rows is not None:
         rows = st.session_state.rows
         text = st.session_state.text
+        st.success(f"✅ Found {len(rows)} transactions!")
 
-    st.success(f"✅ Found {len(rows)} transactions!")
+        # All transactions CSV
+        csv_all = rows_to_csv(rows)
+        st.download_button(
+            label="📥 Download transactions.csv",
+            data=csv_all,
+            file_name="transactions.csv",
+            mime="text/csv",
+        )
 
-    # All transactions CSV
-    csv_all = rows_to_csv(rows)
-    st.download_button(
-        label="📥 Download transactions.csv",
-        data=csv_all,
-        file_name="transactions.csv",
-        mime="text/csv",
-    )
+        # Raw text
+        st.download_button(
+            label="📥 Download transactions.txt",
+            data=text,
+            file_name="transactions.txt",
+            mime="text/plain",
+        )
 
-    # Raw text
-    st.download_button(
-        label="📥 Download transactions.txt",
-        data=text,
-        file_name="transactions.txt",
-        mime="text/plain",
-    )
-
-    # Preview
-    st.subheader("Preview (first 10 rows)")
-    st.dataframe(rows[:10])
+        # Preview
+        st.subheader("Preview (first 10 rows)")
+        st.dataframe(rows[:10])
