@@ -357,10 +357,12 @@ if uploaded_file:
                 st.session_state.text = text
                 st.session_state.error = None
             except PDFProcessingError as e:
+                st.session_state.processed_file_hash = file_hash
                 st.session_state.error = str(e)
                 st.session_state.rows = None
                 st.session_state.text = None
             except Exception as e:
+                st.session_state.processed_file_hash = file_hash
                 st.session_state.error = f"Unexpected error processing PDF: {str(e)}"
                 st.session_state.rows = None
                 st.session_state.text = None
